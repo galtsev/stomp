@@ -1,8 +1,8 @@
 package server
 
 import (
-	"dan/stomp/frame"
 	"errors"
+	"github.com/galtsev/stomp/frame"
 )
 
 func Err(msg string) {
@@ -29,6 +29,20 @@ func (h *Handler) addAckCallBack(msgId string, cb func()) {
 	h.waitingAcks[msgId] = cb
 }
 
+func (h *Handler) Disconnect() {
+	for subscriptionId, dispatcher := range h.subscriptions {
+		dispatcher.Unsubscribe(subscriptionId)
+	}
+}
+
+func (h *Handler) Err(msg string) {
+	fr := frame.New()
+	fr.Command = frame.CmdError
+	fr.Header.Set(frame.HdrMessage, msg)
+	h.Client.WriteChan <- fr
+	h.Disconnect()
+}
+
 func (h *Handler) Handle(fr frame.Frame) {
 	switch fr.Command {
 
@@ -43,11 +57,11 @@ func (h *Handler) Handle(fr frame.Frame) {
 	case frame.CmdSubscribe:
 		destination, ok := fr.Header.Get(frame.HdrDestination)
 		if !ok {
-			Err("Missing destination header")
+			h.Err("Missing destination header")
 		}
 		subscriptionId, ok := fr.Header.Get(frame.HdrId)
 		if !ok {
-			Err("Missing subscription id header")
+			h.Err("Missing subscription id header")
 		}
 		dispatcher := h.Server.GetDispatcher(destination)
 		h.subscriptions[subscriptionId] = dispatcher
@@ -58,9 +72,9 @@ func (h *Handler) Handle(fr frame.Frame) {
 		dispatcher.Subscribe(fr, options)
 
 	case frame.CmdUnsubscribe:
-		subscriptionId, ok := fr.Header.Get(frame.HdrSubscription)
+		subscriptionId, ok := fr.Header.Get(frame.HdrId)
 		if !ok {
-			Err("Missing subscription header")
+			h.Err("Missing subscription id header")
 		}
 		if dispatcher, ok := h.subscriptions[subscriptionId]; ok {
 			delete(h.subscriptions, subscriptionId)
@@ -70,7 +84,7 @@ func (h *Handler) Handle(fr frame.Frame) {
 	case frame.CmdSend:
 		destination, ok := fr.Header.Get(frame.HdrDestination)
 		if !ok {
-			Err("Missing destination header")
+			h.Err("Missing destination header")
 		}
 		dispatcher := h.Server.GetDispatcher(destination)
 		outFr := fr.Clone()
@@ -80,7 +94,7 @@ func (h *Handler) Handle(fr frame.Frame) {
 	case frame.CmdAck:
 		id, ok := fr.Header.Get(frame.HdrId)
 		if !ok {
-			Err("Missing Id header")
+			h.Err("Missing Id header")
 		}
 		wh, ok := h.waitingAcks[id]
 		if ok {

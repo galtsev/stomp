@@ -55,3 +55,33 @@ func TestReadManyFrames(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, []byte("msg body"), fr2.Body)
 }
+
+type FuncReader func(dest []byte) (n int, err error)
+
+func (f FuncReader) Read(dest []byte) (n int, err error) {
+	return f(dest)
+}
+
+var gfr *Frame
+
+func BenchmarkReader(b *testing.B) {
+	msg := []byte("SEND\ndestination:/queue/20161202\ncontent-length:9\n\nmsg body\x00")
+	buf := msg
+	// io.Reader, that repeat the same message
+	src := FuncReader(func(dest []byte) (int, error) {
+		if len(buf) == 0 {
+			buf = msg
+		}
+		n := copy(dest, buf)
+		buf = buf[n:]
+		return n, nil
+	})
+	reader := NewReader(src)
+	var err error
+	for i := 0; i < b.N; i++ {
+		gfr, err = reader.Read()
+		if err != nil {
+			b.Error(err)
+		}
+	}
+}

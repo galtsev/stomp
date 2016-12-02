@@ -1,7 +1,7 @@
 package server
 
 import (
-	"dan/stomp/frame"
+	"github.com/galtsev/stomp/frame"
 	"github.com/stretchr/testify/assert"
 	"sync"
 	"testing"

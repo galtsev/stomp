@@ -1,7 +1,9 @@
 package frame
 
-import (
-	"errors"
-)
+type ParsingError struct {
+	msg string
+}
 
-var ParsingError = errors.New("Parsing erorr")
+func (err ParsingError) Error() string {
+	return err.msg
+}

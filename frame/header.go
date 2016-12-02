@@ -2,6 +2,7 @@ package frame
 
 import (
 	"bytes"
+	"fmt"
 )
 
 const (
@@ -27,7 +28,6 @@ const (
 )
 
 func Encode(value string, dest *[]byte) {
-	*dest = (*dest)[:0]
 	for _, c := range []byte(value) {
 		switch c {
 		case '\\':
@@ -44,7 +44,7 @@ func Encode(value string, dest *[]byte) {
 	}
 }
 
-func Decode(value []byte) string {
+func Decode(value []byte) (string, error) {
 	dest := make([]byte, 0, len(value)+8)
 	i := 0
 	for i < len(value)-1 {
@@ -60,7 +60,7 @@ func Decode(value []byte) string {
 			case 'c':
 				dest = append(dest, 'c')
 			default:
-				panic(ParsingError)
+				return "", ParsingError{msg: fmt.Sprintf("Bad escape sequence \\%c in header %s", value[i+1], string(value))}
 			}
 			i += 2
 		} else {
@@ -69,7 +69,7 @@ func Decode(value []byte) string {
 		}
 	}
 	dest = append(dest, value[i])
-	return string(dest)
+	return string(dest), nil
 }
 
 type Header struct {
@@ -94,8 +94,23 @@ func (h *Header) Set(name, value string) {
 func (h *Header) Parse(buf []byte) error {
 	p := bytes.IndexByte(buf, ':')
 	if p < 0 {
-		return ParsingError
+		return ParsingError{msg: "Missing semicolon in header " + string(buf)}
 	}
-	h.Set(string(buf[:p]), Decode(buf[p+1:]))
+	val, err := Decode(buf[p+1:])
+	if err != nil {
+		return err
+	}
+	h.Set(string(buf[:p]), val)
 	return nil
+}
+
+func (h *Header) Write(b *[]byte) {
+	buf := *b
+	for k, v := range h.headers {
+		buf = append(buf, []byte(k)...)
+		buf = append(buf, ':')
+		Encode(v, &buf)
+		buf = append(buf, '\n')
+	}
+	*b = buf
 }
