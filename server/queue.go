@@ -32,7 +32,7 @@ func (q *Queue) Subscribe(fr frame.Frame, options SubscriptionOptions) {
 	subscriptionId, _ := fr.Header.Get(frame.HdrId)
 	ack, ok := fr.Header.Get(frame.HdrAck)
 	if !ok {
-		ack = "auto"
+		ack = frame.AckAuto
 	}
 	sub := queueSubscription{
 		stop: make(chan struct{}, 0),
@@ -46,7 +46,7 @@ func (q *Queue) Subscribe(fr frame.Frame, options SubscriptionOptions) {
 				return
 			case fr := <-q.ch:
 				var msgId string
-				if ack == "client" {
+				if ack != frame.AckAuto {
 					msgId := genId()
 					fr.Header.Set(frame.HdrAck, msgId)
 				}

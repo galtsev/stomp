@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"github.com/galtsev/stomp/frame"
+	"io"
 )
 
 func Err(msg string) {
@@ -10,18 +11,52 @@ func Err(msg string) {
 }
 
 type Handler struct {
-	Client        *ClientConnection
 	Server        *Server
+	inChan        chan frame.Frame
+	outChan       chan frame.Frame
 	subscriptions map[string]Dispatcher
 	waitingAcks   map[string]func()
 }
 
-func NewHandler(client *ClientConnection, server *Server) *Handler {
-	return &Handler{
-		Client:        client,
+func NewHandler(server *Server, reader io.Reader, writer io.Writer) *Handler {
+	handler := Handler{
 		Server:        server,
+		inChan:        make(chan frame.Frame),
+		outChan:       make(chan frame.Frame),
 		subscriptions: make(map[string]Dispatcher),
 		waitingAcks:   make(map[string]func()),
+	}
+	if writer != nil {
+		go handler.writeLoop(writer)
+	}
+	if reader != nil {
+		go handler.readLoop(reader)
+	}
+	go handler.processLoop()
+	return &handler
+}
+
+func (h *Handler) readLoop(r io.Reader) {
+	reader := frame.NewReader(r)
+	for {
+		fr, err := reader.Read()
+		if err != nil {
+			h.Err(err.Error())
+		}
+		h.inChan <- *fr
+	}
+}
+
+func (h *Handler) writeLoop(w io.Writer) {
+	writer := frame.NewWriter(w)
+	for fr := range h.outChan {
+		writer.Write(&fr)
+	}
+}
+
+func (h *Handler) processLoop() {
+	for fr := range h.inChan {
+		h.Handle(fr)
 	}
 }
 
@@ -39,7 +74,7 @@ func (h *Handler) Err(msg string) {
 	fr := frame.New()
 	fr.Command = frame.CmdError
 	fr.Header.Set(frame.HdrMessage, msg)
-	h.Client.WriteChan <- fr
+	h.outChan <- *fr
 	h.Disconnect()
 }
 
@@ -66,7 +101,7 @@ func (h *Handler) Handle(fr frame.Frame) {
 		dispatcher := h.Server.GetDispatcher(destination)
 		h.subscriptions[subscriptionId] = dispatcher
 		options := SubscriptionOptions{
-			ClientWriteChan: h.Client.WriteChan,
+			ClientWriteChan: h.outChan,
 			AddAckCallback:  h.addAckCallBack,
 		}
 		dispatcher.Subscribe(fr, options)
@@ -107,7 +142,7 @@ func (h *Handler) Handle(fr frame.Frame) {
 		recFrame := frame.New()
 		recFrame.Command = frame.CmdReceipt
 		recFrame.Header.Set(frame.HdrReceipt, receiptId)
-		h.Client.WriteChan <- *recFrame
+		h.outChan <- *recFrame
 	}
 
 }

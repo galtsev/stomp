@@ -1,51 +1,14 @@
 package server
 
 import (
+	"bytes"
 	"github.com/galtsev/stomp/frame"
 	"github.com/stretchr/testify/assert"
+	"io"
 	"sync"
 	"testing"
 	"time"
 )
-
-func TestHandlerSubscribeAndSend(t *testing.T) {
-	var (
-		subscriptionId string = randomString(8)
-		destination    string = "/queue/" + randomString(4)
-		body           []byte = randomBytes(16)
-	)
-	// setup
-	server := NewServer()
-	client := &ClientConnection{
-		WriteChan: make(chan frame.Frame, 4),
-	}
-	handler := NewHandler(client, server)
-
-	// subscribe
-	subscriptionFrame := frame.New()
-	subscriptionFrame.Command = frame.CmdSubscribe
-	subscriptionFrame.Header.Set(frame.HdrId, subscriptionId)
-	subscriptionFrame.Header.Set(frame.HdrDestination, destination)
-	handler.Handle(*subscriptionFrame)
-
-	// send
-	sendFrame := frame.New()
-	sendFrame.Command = frame.CmdSend
-	sendFrame.Header.Set(frame.HdrDestination, destination)
-	sendFrame.Body = body
-	handler.Handle(*sendFrame)
-
-	// check output
-	select {
-	case outFr := <-client.WriteChan:
-		assert.Equal(t, frame.CmdMessage, outFr.Command, "Wrong message type")
-		assert.Equal(t, body, outFr.Body, "wrong message body")
-		subId, _ := outFr.Header.Get(frame.HdrSubscription)
-		assert.Equal(t, subscriptionId, subId, "wrong subscription id")
-	case <-time.NewTimer(time.Millisecond).C:
-		t.Error("Timeout getting dispatched message")
-	}
-}
 
 func makeSubscriptionFrame(subId, destination string) *frame.Frame {
 	fr := frame.New()
@@ -61,6 +24,34 @@ func makeSendFrame(destination, body string) *frame.Frame {
 	fr.Header.Set(frame.HdrDestination, destination)
 	fr.Body = []byte(body)
 	return fr
+}
+
+func TestHandlerSubscribeAndSend(t *testing.T) {
+	var (
+		subscriptionId string = randomString(8)
+		destination    string = "/queue/" + randomString(4)
+		body           string = randomString(16)
+	)
+	// setup
+	server := NewServer()
+	handler := NewHandler(server, nil, nil)
+
+	// subscribe
+	handler.Handle(*makeSubscriptionFrame(subscriptionId, destination))
+
+	// send
+	handler.Handle(*makeSendFrame(destination, body))
+
+	// check output
+	select {
+	case outFr := <-handler.outChan:
+		assert.Equal(t, frame.CmdMessage, outFr.Command, "Wrong message type")
+		assert.Equal(t, []byte(body), outFr.Body, "wrong message body")
+		subId, _ := outFr.Header.Get(frame.HdrSubscription)
+		assert.Equal(t, subscriptionId, subId, "wrong subscription id")
+	case <-time.NewTimer(time.Millisecond).C:
+		t.Error("Timeout getting dispatched message")
+	}
 }
 
 type TestMsg struct {
@@ -89,16 +80,10 @@ func TestDispatchThreeSubscriptions(t *testing.T) {
 	server := NewServer()
 
 	// client1
-	client1 := &ClientConnection{
-		WriteChan: make(chan frame.Frame, 4),
-	}
-	handler1 := NewHandler(client1, server)
+	handler1 := NewHandler(server, nil, nil)
 
 	// client2
-	client2 := &ClientConnection{
-		WriteChan: make(chan frame.Frame, 4),
-	}
-	handler2 := NewHandler(client2, server)
+	handler2 := NewHandler(server, nil, nil)
 
 	// subscribe client 1
 	handler1.Handle(*makeSubscriptionFrame("sid1", "/queue/1"))
@@ -138,9 +123,9 @@ func TestDispatchThreeSubscriptions(t *testing.T) {
 	}
 	for i := 0; i < 4; i++ {
 		select {
-		case fr := <-client1.WriteChan:
+		case fr := <-handler1.outChan:
 			checkMsg(fr, 1)
-		case fr := <-client2.WriteChan:
+		case fr := <-handler2.outChan:
 			checkMsg(fr, 2)
 		case <-time.NewTimer(time.Millisecond * 10).C:
 			t.Error("timeout!")
@@ -155,21 +140,108 @@ func TestDispatchThreeSubscriptions(t *testing.T) {
 
 }
 
+// this test use frame.Reader and frame.Writer
+// one client subscribe to queue /queue/1
+// another one send three messages to this queue
+func TestHandlerReaderWriter(t *testing.T) {
+	server := NewServer()
+	makeConn := func() (reader io.Reader, writer io.Writer, h *Handler) {
+		reader, hWriter := io.Pipe()
+		hReader, writer := io.Pipe()
+		h = NewHandler(server, hReader, hWriter)
+		return
+	}
+	_, pWriter, producer := makeConn()
+	cReader, cWriter, consumer := makeConn()
+
+	send := func(w io.Writer, msg string) {
+		n, err := w.Write([]byte(msg))
+		assert.NoError(t, err)
+		assert.Equal(t, len(msg), n)
+	}
+	// subscribe
+	send(cWriter, "SUBSCRIBE\ndestination:/queue/1\nid:sub1\n\n\x00")
+
+	// setup listener
+	var wg sync.WaitGroup
+	frameReader := frame.NewReader(cReader)
+	expect := func(body string) {
+		fr, err := frameReader.Read()
+		assert.NoError(t, err)
+		assert.Equal(t, []byte(body), fr.Body)
+	}
+	wg.Add(1)
+	go func() {
+		expect("msg1")
+		expect("msg2")
+		expect("another message")
+		wg.Done()
+	}()
+
+	// send messages
+	send(pWriter, "SEND\ndestination:/queue/1\n\nmsg1\x00")
+	send(pWriter, "SEND\ndestination:/queue/1\n\nmsg2\x00")
+	send(pWriter, "SEND\ndestination:/queue/1\n\nanother message\x00")
+	wg.Wait()
+	producer.Disconnect()
+	consumer.Disconnect()
+}
+
+func BenchmarkHandlerReaderWriter(b *testing.B) {
+	server := NewServer()
+	makeConn := func() (reader io.Reader, writer io.Writer, h *Handler) {
+		reader, hWriter := io.Pipe()
+		hReader, writer := io.Pipe()
+		h = NewHandler(server, hReader, hWriter)
+		return
+	}
+	_, pWriter, producer := makeConn()
+	cReader, cWriter, consumer := makeConn()
+
+	send := func(w io.Writer, msg string) {
+		n, err := w.Write([]byte(msg))
+		assert.NoError(b, err)
+		assert.Equal(b, len(msg), n)
+	}
+	// subscribe
+	send(cWriter, "SUBSCRIBE\ndestination:/queue/1\nid:sub1\n\n\x00")
+
+	// setup listener
+	var wg sync.WaitGroup
+	frameReader := frame.NewReader(cReader)
+	wg.Add(1)
+	go func() {
+		for {
+			fr, err := frameReader.Read()
+			if err != nil {
+				b.Error(err.Error())
+			}
+			if bytes.Equal(fr.Body, []byte("done")) {
+				break
+			}
+		}
+		wg.Done()
+	}()
+
+	// send messages
+	for i := 0; i < b.N; i++ {
+		send(pWriter, "SEND\ndestination:/queue/1\n\nmessage body\x00")
+	}
+	send(pWriter, "SEND\ndestination:/queue/1\n\ndone\x00")
+	wg.Wait()
+	producer.Disconnect()
+	consumer.Disconnect()
+}
+
 // one producer, one consumer, one queue
 func BenchmarkHandlerOne(b *testing.B) {
 	server := NewServer()
 
 	// client1
-	client1 := &ClientConnection{
-		WriteChan: make(chan frame.Frame, 4),
-	}
-	handler1 := NewHandler(client1, server)
+	handler1 := NewHandler(server, nil, nil)
 
 	// client2
-	client2 := &ClientConnection{
-		WriteChan: make(chan frame.Frame, 4),
-	}
-	handler2 := NewHandler(client2, server)
+	handler2 := NewHandler(server, nil, nil)
 
 	// subscribe client 1
 	handler1.Handle(*makeSubscriptionFrame("sid1", "/queue/1"))
@@ -179,7 +251,7 @@ func BenchmarkHandlerOne(b *testing.B) {
 	wg.Add(1)
 	go func() {
 		for i := 0; i < b.N; i++ {
-			<-client1.WriteChan
+			<-handler1.outChan
 		}
 		wg.Done()
 	}()

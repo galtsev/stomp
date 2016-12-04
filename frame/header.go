@@ -91,6 +91,12 @@ func (h *Header) Set(name, value string) {
 	h.headers[name] = value
 }
 
+func (h *Header) Update(src Header) {
+	for k, v := range src.headers {
+		h.headers[k] = v
+	}
+}
+
 func (h *Header) Parse(buf []byte) error {
 	p := bytes.IndexByte(buf, ':')
 	if p < 0 {

@@ -13,10 +13,9 @@ func New() *Frame {
 }
 
 func (f *Frame) Clone() *Frame {
-	res := Frame{
-		Command: f.Command,
-		Header:  f.Header,
-		Body:    f.Body,
-	}
-	return &res
+	res := New()
+	res.Command = f.Command
+	res.Body = f.Body
+	res.Header.Update(f.Header)
+	return res
 }
