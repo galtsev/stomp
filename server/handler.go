@@ -85,9 +85,7 @@ func (h *Handler) Handle(fr frame.Frame) {
 		//h.state = StateConnected
 
 	case frame.CmdDisconnect:
-		for subscriptionId, dispatcher := range h.subscriptions {
-			dispatcher.Unsubscribe(subscriptionId)
-		}
+		h.Disconnect()
 
 	case frame.CmdSubscribe:
 		destination, ok := fr.Header.Get(frame.HdrDestination)
@@ -141,7 +139,7 @@ func (h *Handler) Handle(fr frame.Frame) {
 	if receiptId, ok := fr.Header.Get(frame.HdrReceipt); ok {
 		recFrame := frame.New()
 		recFrame.Command = frame.CmdReceipt
-		recFrame.Header.Set(frame.HdrReceipt, receiptId)
+		recFrame.Header.Set(frame.HdrReceiptId, receiptId)
 		h.outChan <- *recFrame
 	}
 

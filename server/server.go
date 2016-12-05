@@ -1,31 +1,54 @@
 package server
 
 import (
-	"github.com/go-stomp/stomp/frame"
+	"net"
 	"strings"
+	"sync"
 )
 
 type Server struct {
-	InChan      chan frame.Frame
 	Dispatchers map[string]Dispatcher
+	dispLock    sync.RWMutex
 }
 
 func NewServer() *Server {
 	return &Server{
-		InChan:      make(chan frame.Frame),
 		Dispatchers: make(map[string]Dispatcher),
 	}
 }
 
-func (s *Server) GetDispatcher(destination string) Dispatcher {
-	dispatcher, ok := s.Dispatchers[destination]
-	if !ok {
-		if strings.HasPrefix(destination, "/queue") {
-			dispatcher = NewQueue(destination)
-		} else {
-			dispatcher = NewTopic(destination)
+func (s *Server) ListenAndServe(addr string) {
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		panic(err)
+	}
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			panic(err)
 		}
-		s.Dispatchers[destination] = dispatcher
+		NewHandler(s, conn, conn)
+	}
+}
+
+func (s *Server) GetDispatcher(destination string) Dispatcher {
+	var dispatcher Dispatcher
+	var ok bool
+	s.dispLock.RLock()
+	dispatcher, ok = s.Dispatchers[destination]
+	s.dispLock.RUnlock()
+	if !ok {
+		s.dispLock.Lock()
+		dispatcher, ok = s.Dispatchers[destination]
+		if !ok {
+			if strings.HasPrefix(destination, "/queue") {
+				dispatcher = NewQueue(destination)
+			} else {
+				dispatcher = NewTopic(destination)
+			}
+			s.Dispatchers[destination] = dispatcher
+		}
+		s.dispLock.Unlock()
 	}
 	return dispatcher
 }

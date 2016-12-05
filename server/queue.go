@@ -14,6 +14,7 @@ type Queue struct {
 	Destination   string
 	ch            chan frame.Frame
 	Subscriptions map[string]*queueSubscription
+	lock          sync.Mutex
 }
 
 func NewQueue(destination string) *Queue {
@@ -29,6 +30,8 @@ func (q *Queue) Send(fr frame.Frame) {
 }
 
 func (q *Queue) Subscribe(fr frame.Frame, options SubscriptionOptions) {
+	q.lock.Lock()
+	defer q.lock.Unlock()
 	subscriptionId, _ := fr.Header.Get(frame.HdrId)
 	ack, ok := fr.Header.Get(frame.HdrAck)
 	if !ok {
@@ -63,6 +66,8 @@ func (q *Queue) Subscribe(fr frame.Frame, options SubscriptionOptions) {
 }
 
 func (q *Queue) Unsubscribe(subscriptionId string) {
+	q.lock.Lock()
+	defer q.lock.Unlock()
 	if sub, ok := q.Subscriptions[subscriptionId]; ok {
 		close(sub.stop)
 		delete(q.Subscriptions, subscriptionId)
