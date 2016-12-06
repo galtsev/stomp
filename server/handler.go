@@ -4,6 +4,7 @@ import (
 	"errors"
 	"github.com/galtsev/stomp/frame"
 	"io"
+	"log"
 )
 
 func Err(msg string) {
@@ -12,6 +13,7 @@ func Err(msg string) {
 
 type Handler struct {
 	Server        *Server
+	id            string
 	inChan        chan frame.Frame
 	outChan       chan frame.Frame
 	subscriptions map[string]Dispatcher
@@ -21,6 +23,7 @@ type Handler struct {
 func NewHandler(server *Server, reader io.Reader, writer io.Writer) *Handler {
 	handler := Handler{
 		Server:        server,
+		id:            genId(),
 		inChan:        make(chan frame.Frame),
 		outChan:       make(chan frame.Frame),
 		subscriptions: make(map[string]Dispatcher),
@@ -40,6 +43,9 @@ func (h *Handler) readLoop(r io.Reader) {
 	reader := frame.NewReader(r)
 	for {
 		fr, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
 		if err != nil {
 			h.Err(err.Error())
 		}
@@ -65,12 +71,16 @@ func (h *Handler) addAckCallBack(msgId string, cb func()) {
 }
 
 func (h *Handler) Disconnect() {
+	close(h.inChan)
+	close(h.outChan)
 	for subscriptionId, dispatcher := range h.subscriptions {
 		dispatcher.Unsubscribe(subscriptionId)
 	}
+	h.Server.RemoveHandler(h)
 }
 
 func (h *Handler) Err(msg string) {
+	log.Println("ERROR", msg)
 	fr := frame.New()
 	fr.Command = frame.CmdError
 	fr.Header.Set(frame.HdrMessage, msg)
@@ -81,11 +91,14 @@ func (h *Handler) Err(msg string) {
 func (h *Handler) Handle(fr frame.Frame) {
 	switch fr.Command {
 
-	case frame.CmdConnect:
-		//h.state = StateConnected
+	case frame.CmdConnect, frame.CmdStomp:
+		fr := frame.New()
+		fr.Command = frame.CmdConnected
+		fr.Header.Set(frame.HdrVersion, "1.2")
+		h.outChan <- *fr
 
 	case frame.CmdDisconnect:
-		h.Disconnect()
+		defer h.Disconnect()
 
 	case frame.CmdSubscribe:
 		destination, ok := fr.Header.Get(frame.HdrDestination)
@@ -134,6 +147,8 @@ func (h *Handler) Handle(fr frame.Frame) {
 			delete(h.waitingAcks, id)
 			wh()
 		}
+	default:
+		h.Err("Unknown command: " + fr.Command)
 	}
 
 	if receiptId, ok := fr.Header.Get(frame.HdrReceipt); ok {

@@ -1,6 +1,8 @@
 package server
 
 import (
+	"io"
+	"log"
 	"net"
 	"strings"
 	"sync"
@@ -8,26 +10,67 @@ import (
 
 type Server struct {
 	Dispatchers map[string]Dispatcher
+	Handlers    map[string]*Handler
+	listener    net.Listener
+	hLock       sync.Mutex
 	dispLock    sync.RWMutex
+	// temporary hook for testing
+	// send message to this channel when listener is ready
+	NotifyChan chan struct{}
 }
 
 func NewServer() *Server {
 	return &Server{
 		Dispatchers: make(map[string]Dispatcher),
+		Handlers:    make(map[string]*Handler),
 	}
+}
+
+func (s *Server) AddHandler(h *Handler) {
+	s.hLock.Lock()
+	s.Handlers[h.id] = h
+	s.hLock.Unlock()
+}
+
+func (s *Server) RemoveHandler(h *Handler) {
+	s.hLock.Lock()
+	if _, ok := s.Handlers[h.id]; ok {
+		delete(s.Handlers, h.id)
+	}
+	s.hLock.Unlock()
 }
 
 func (s *Server) ListenAndServe(addr string) {
 	listener, err := net.Listen("tcp", addr)
+
 	if err != nil {
-		panic(err)
+		log.Panic(err)
+	}
+	s.listener = listener
+	log.Println("Listen on", addr)
+	// for testing
+	if s.NotifyChan != nil {
+		s.NotifyChan <- struct{}{}
 	}
 	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			panic(err)
+		conn, err := s.listener.Accept()
+		if err == io.EOF {
+			break
 		}
-		NewHandler(s, conn, conn)
+		if err != nil {
+			log.Println(err.Error())
+		}
+		s.AddHandler(NewHandler(s, conn, conn))
+	}
+}
+
+func (s *Server) Stop() {
+	err := s.listener.Close()
+	if err != nil {
+		log.Println("Error closing ")
+	}
+	for _, handler := range s.Handlers {
+		handler.Disconnect()
 	}
 }
 
