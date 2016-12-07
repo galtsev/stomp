@@ -64,10 +64,18 @@ func (s *Server) ListenAndServe(addr string) {
 	}
 }
 
+func (s *Server) Connect() *net.Conn {
+	srvConn, clientConn := net.Pipe()
+	s.AddHandler(NewHandler(s, srvConn, srvConn))
+	return &clientConn
+}
+
 func (s *Server) Stop() {
-	err := s.listener.Close()
-	if err != nil {
-		log.Println("Error closing ")
+	if s.listener != nil {
+		err := s.listener.Close()
+		if err != nil {
+			log.Println("Error closing ")
+		}
 	}
 	for _, handler := range s.Handlers {
 		handler.Disconnect()
