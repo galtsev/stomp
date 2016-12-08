@@ -1,15 +1,10 @@
 package server
 
 import (
-	"errors"
 	"github.com/galtsev/stomp/frame"
 	"io"
 	"log"
 )
-
-func Err(msg string) {
-	panic(errors.New(msg))
-}
 
 type Handler struct {
 	Server        *Server
